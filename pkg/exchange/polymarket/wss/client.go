@@ -17,7 +17,7 @@ type ClientConfig struct {
 	PingInterval         time.Duration
 	ReconnectDelay       time.Duration
 	MaxReconnectAttempts int
-	Debug                bool
+	ChannelBufferSize    int
 	ProxyString          string
 }
 
@@ -48,7 +48,9 @@ func NewClient(cfg ClientConfig) *Client {
 	if cfg.MaxReconnectAttempts == 0 {
 		cfg.MaxReconnectAttempts = 10
 	}
-
+	if cfg.ChannelBufferSize == 0 {
+		cfg.ChannelBufferSize = 100
+	}
 	return &Client{config: cfg}
 }
 
@@ -57,12 +59,10 @@ func (c *Client) CreateMarketConnection(assetIDs []string) *Connection {
 	if len(assetIDs) == 0 {
 		return nil
 	}
-
 	payload := map[string]interface{}{
 		"assets_ids": assetIDs,
 		"type":       "market",
 	}
-
 	return NewConnection(ChannelMarket, c.config, payload)
 }
 
@@ -79,7 +79,6 @@ func (c *Client) CreateUserConnection(auth common.WssAuth, markets []string) *Co
 	if len(markets) > 0 {
 		payload["markets"] = markets
 	}
-
 	return NewConnection(ChannelUser, c.config, payload)
 }
 
@@ -96,76 +95,55 @@ type Connection struct {
 	pingTimer          *time.Ticker
 	reconnectTimer     *time.Timer
 	stopCh             chan struct{}
-	processedTrades    sync.Map // 成交去重
+	processedTrades    sync.Map
 
-	// 回调函数
+	// 生命周期回调
 	onConnected     func()
 	onDisconnected  func(code int, reason string)
 	onError         func(err error)
 	onReconnecting  func(attempt int, delay time.Duration)
 	onReconnectFail func(attempts int)
 
-	// Market 频道回调
-	onBook           func(*common.OrderBookSnapshot)
-	onPriceChange    func(*common.PriceChangeEvent)
-	onLastTradePrice func(*common.LastTradePrice)
-	onTickSizeChange func(*common.TickSizeChange)
-
-	// User 频道回调
-	onOrder func(*common.OrderUpdate)
-	onTrade func(*common.TradeNotification)
-
-	// 通用消息回调
-	onMessage func(channel ChannelType, data []byte)
+	// Channel 推送
+	bookCh           chan *common.OrderBookSnapshot
+	priceChangeCh    chan *common.PriceChangeEvent
+	lastTradePriceCh chan *common.LastTradePrice
+	tickSizeChangeCh chan *common.TickSizeChange
+	orderCh          chan *common.OrderUpdate
+	tradeCh          chan *common.TradeNotification
 }
 
 // NewConnection 创建 WebSocket 连接
 func NewConnection(channel ChannelType, config ClientConfig, payload map[string]interface{}) *Connection {
+	bufSize := config.ChannelBufferSize
 	return &Connection{
 		channel:          channel,
 		config:           config,
 		subscribePayload: payload,
 		stopCh:           make(chan struct{}),
+		bookCh:           make(chan *common.OrderBookSnapshot, bufSize),
+		priceChangeCh:    make(chan *common.PriceChangeEvent, bufSize),
+		lastTradePriceCh: make(chan *common.LastTradePrice, bufSize),
+		tickSizeChangeCh: make(chan *common.TickSizeChange, bufSize),
+		orderCh:          make(chan *common.OrderUpdate, bufSize),
+		tradeCh:          make(chan *common.TradeNotification, bufSize),
 	}
 }
 
-// OnConnected 设置连接成功回调
-func (c *Connection) OnConnected(fn func()) { c.onConnected = fn }
+// 生命周期回调设置
+func (c *Connection) OnConnected(fn func())                                  { c.onConnected = fn }
+func (c *Connection) OnDisconnected(fn func(code int, reason string))        { c.onDisconnected = fn }
+func (c *Connection) OnError(fn func(err error))                             { c.onError = fn }
+func (c *Connection) OnReconnecting(fn func(attempt int, delay time.Duration)) { c.onReconnecting = fn }
+func (c *Connection) OnReconnectFail(fn func(attempts int))                  { c.onReconnectFail = fn }
 
-// OnDisconnected 设置断开连接回调
-func (c *Connection) OnDisconnected(fn func(code int, reason string)) { c.onDisconnected = fn }
-
-// OnError 设置错误回调
-func (c *Connection) OnError(fn func(err error)) { c.onError = fn }
-
-// OnReconnecting 设置重连中回调
-func (c *Connection) OnReconnecting(fn func(attempt int, delay time.Duration)) {
-	c.onReconnecting = fn
-}
-
-// OnReconnectFail 设置重连失败回调
-func (c *Connection) OnReconnectFail(fn func(attempts int)) { c.onReconnectFail = fn }
-
-// OnBook 设置订单簿快照回调
-func (c *Connection) OnBook(fn func(*common.OrderBookSnapshot)) { c.onBook = fn }
-
-// OnPriceChange 设置价格变化回调
-func (c *Connection) OnPriceChange(fn func(*common.PriceChangeEvent)) { c.onPriceChange = fn }
-
-// OnLastTradePrice 设置最新成交价回调
-func (c *Connection) OnLastTradePrice(fn func(*common.LastTradePrice)) { c.onLastTradePrice = fn }
-
-// OnTickSizeChange 设置 tick size 变化回调
-func (c *Connection) OnTickSizeChange(fn func(*common.TickSizeChange)) { c.onTickSizeChange = fn }
-
-// OnOrder 设置订单更新回调
-func (c *Connection) OnOrder(fn func(*common.OrderUpdate)) { c.onOrder = fn }
-
-// OnTrade 设置成交通知回调
-func (c *Connection) OnTrade(fn func(*common.TradeNotification)) { c.onTrade = fn }
-
-// OnMessage 设置原始消息回调
-func (c *Connection) OnMessage(fn func(channel ChannelType, data []byte)) { c.onMessage = fn }
+// Channel 获取方法
+func (c *Connection) BookCh() <-chan *common.OrderBookSnapshot     { return c.bookCh }
+func (c *Connection) PriceChangeCh() <-chan *common.PriceChangeEvent { return c.priceChangeCh }
+func (c *Connection) LastTradePriceCh() <-chan *common.LastTradePrice { return c.lastTradePriceCh }
+func (c *Connection) TickSizeChangeCh() <-chan *common.TickSizeChange { return c.tickSizeChangeCh }
+func (c *Connection) OrderCh() <-chan *common.OrderUpdate           { return c.orderCh }
+func (c *Connection) TradeCh() <-chan *common.TradeNotification     { return c.tradeCh }
 
 // Connect 连接
 func (c *Connection) Connect() error {
@@ -179,22 +157,15 @@ func (c *Connection) Connect() error {
 
 	wsURL := fmt.Sprintf("%s/ws/%s", c.config.BaseURL, c.channel)
 
-	dialer := websocket.Dialer{
-		HandshakeTimeout: 10 * time.Second,
-	}
+	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
 
-	// 配置代理
 	if c.config.ProxyString != "" {
-		proxyCfg := common.ParseProxyString(c.config.ProxyString)
-		if proxyCfg != nil {
+		if proxyCfg := common.ParseProxyString(c.config.ProxyString); proxyCfg != nil {
 			if proxyCfg.IsSocks() {
-				// SOCKS5 代理
-				proxyDialer, err := common.CreateProxyDialer(c.config.ProxyString)
-				if err == nil && proxyDialer != nil {
+				if proxyDialer, err := common.CreateProxyDialer(c.config.ProxyString); err == nil && proxyDialer != nil {
 					dialer.NetDial = proxyDialer.Dial
 				}
 			} else {
-				// HTTP 代理
 				dialer.Proxy = http.ProxyURL(proxyCfg.GetProxyURL())
 			}
 		}
@@ -211,22 +182,17 @@ func (c *Connection) Connect() error {
 	c.reconnectAttempts = 0
 	c.mu.Unlock()
 
-	// 发送订阅消息
 	if err := c.subscribe(); err != nil {
 		c.Close()
 		return fmt.Errorf("subscribe: %w", err)
 	}
 
-	// 启动心跳
 	c.startPing()
-
-	// 启动消息读取
 	go c.readLoop()
 
 	if c.onConnected != nil {
 		c.onConnected()
 	}
-
 	return nil
 }
 
@@ -247,7 +213,11 @@ func (c *Connection) Close() {
 	c.isConnected = false
 	c.mu.Unlock()
 
-	close(c.stopCh)
+	select {
+	case <-c.stopCh:
+	default:
+		close(c.stopCh)
+	}
 }
 
 // IsConnected 检查连接状态
@@ -257,18 +227,10 @@ func (c *Connection) IsConnected() bool {
 	return c.isConnected
 }
 
-// GetStatus 获取状态
-func (c *Connection) GetStatus() (connected bool, attempts int) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.isConnected, c.reconnectAttempts
-}
-
 // Send 发送消息
 func (c *Connection) Send(data interface{}) error {
 	c.mu.RLock()
-	conn := c.conn
-	connected := c.isConnected
+	conn, connected := c.conn, c.isConnected
 	c.mu.RUnlock()
 
 	if !connected || conn == nil {
@@ -283,25 +245,41 @@ func (c *Connection) Send(data interface{}) error {
 		msg = v
 	default:
 		var err error
-		msg, err = json.Marshal(data)
-		if err != nil {
+		if msg, err = json.Marshal(data); err != nil {
 			return fmt.Errorf("marshal: %w", err)
 		}
 	}
-
 	return conn.WriteMessage(websocket.TextMessage, msg)
 }
 
-// subscribe 发送订阅消息
+// Subscribe 动态订阅 assets（仅 Market 频道）
+func (c *Connection) Subscribe(assetIDs []string) error {
+	if c.channel != ChannelMarket {
+		return fmt.Errorf("subscribe only supported for market channel")
+	}
+	return c.Send(map[string]interface{}{"assets_ids": assetIDs, "operation": "subscribe"})
+}
+
+// Unsubscribe 取消订阅 assets（仅 Market 频道）
+func (c *Connection) Unsubscribe(assetIDs []string) error {
+	if c.channel != ChannelMarket {
+		return fmt.Errorf("unsubscribe only supported for market channel")
+	}
+	return c.Send(map[string]interface{}{"assets_ids": assetIDs, "operation": "unsubscribe"})
+}
+
+// ClearProcessedTrades 清除已处理的成交记录
+func (c *Connection) ClearProcessedTrades() {
+	c.processedTrades = sync.Map{}
+}
+
 func (c *Connection) subscribe() error {
 	return c.Send(c.subscribePayload)
 }
 
-// startPing 启动心跳
 func (c *Connection) startPing() {
 	c.stopPing()
 	c.pingTimer = time.NewTicker(c.config.PingInterval)
-
 	go func() {
 		for {
 			select {
@@ -316,7 +294,6 @@ func (c *Connection) startPing() {
 	}()
 }
 
-// stopPing 停止心跳
 func (c *Connection) stopPing() {
 	if c.pingTimer != nil {
 		c.pingTimer.Stop()
@@ -324,7 +301,6 @@ func (c *Connection) stopPing() {
 	}
 }
 
-// stopReconnect 停止重连
 func (c *Connection) stopReconnect() {
 	if c.reconnectTimer != nil {
 		c.reconnectTimer.Stop()
@@ -332,7 +308,6 @@ func (c *Connection) stopReconnect() {
 	}
 }
 
-// readLoop 消息读取循环
 func (c *Connection) readLoop() {
 	for {
 		c.mu.RLock()
@@ -348,16 +323,12 @@ func (c *Connection) readLoop() {
 			c.handleClose(websocket.CloseAbnormalClosure, err.Error())
 			return
 		}
-
 		c.handleMessage(msg)
 	}
 }
 
-// handleMessage 处理消息
 func (c *Connection) handleMessage(msg []byte) {
 	text := string(msg)
-
-	// 心跳响应
 	if text == "PING" {
 		c.Send("PONG")
 		return
@@ -366,28 +337,19 @@ func (c *Connection) handleMessage(msg []byte) {
 		return
 	}
 
-	// 原始消息回调
-	if c.onMessage != nil {
-		c.onMessage(c.channel, msg)
-	}
-
-	// 解析 JSON
 	var data interface{}
 	if err := json.Unmarshal(msg, &data); err != nil {
 		return
 	}
 
-	// 分发消息
 	if c.channel == ChannelMarket {
 		c.handleMarketMessage(data)
-	} else if c.channel == ChannelUser {
+	} else {
 		c.handleUserMessage(data)
 	}
 }
 
-// handleMarketMessage 处理市场频道消息
 func (c *Connection) handleMarketMessage(data interface{}) {
-	// Market 频道消息可能是数组
 	var messages []map[string]interface{}
 	switch v := data.(type) {
 	case []interface{}:
@@ -404,56 +366,49 @@ func (c *Connection) handleMarketMessage(data interface{}) {
 
 	for _, msg := range messages {
 		eventType, _ := msg["event_type"].(string)
-
 		switch eventType {
 		case "book":
-			if c.onBook != nil {
-				var book common.OrderBookSnapshot
-				if b, err := json.Marshal(msg); err == nil {
-					if json.Unmarshal(b, &book) == nil {
-						c.onBook(&book)
-					}
+			var book common.OrderBookSnapshot
+			if b, _ := json.Marshal(msg); json.Unmarshal(b, &book) == nil {
+				select {
+				case c.bookCh <- &book:
+				default:
 				}
 			}
 		case "price_change":
-			// price_change 事件包含 price_changes 数组
-			if c.onPriceChange != nil {
-				if changes, ok := msg["price_changes"].([]interface{}); ok {
-					for _, change := range changes {
-						if changeMap, ok := change.(map[string]interface{}); ok {
-							var event common.PriceChangeEvent
-							if b, err := json.Marshal(changeMap); err == nil {
-								if json.Unmarshal(b, &event) == nil {
-									c.onPriceChange(&event)
-								}
+			if changes, ok := msg["price_changes"].([]interface{}); ok {
+				for _, change := range changes {
+					if m, ok := change.(map[string]interface{}); ok {
+						var event common.PriceChangeEvent
+						if b, _ := json.Marshal(m); json.Unmarshal(b, &event) == nil {
+							select {
+							case c.priceChangeCh <- &event:
+							default:
 							}
 						}
 					}
 				}
 			}
 		case "last_trade_price":
-			if c.onLastTradePrice != nil {
-				var event common.LastTradePrice
-				if b, err := json.Marshal(msg); err == nil {
-					if json.Unmarshal(b, &event) == nil {
-						c.onLastTradePrice(&event)
-					}
+			var event common.LastTradePrice
+			if b, _ := json.Marshal(msg); json.Unmarshal(b, &event) == nil {
+				select {
+				case c.lastTradePriceCh <- &event:
+				default:
 				}
 			}
 		case "tick_size_change":
-			if c.onTickSizeChange != nil {
-				var event common.TickSizeChange
-				if b, err := json.Marshal(msg); err == nil {
-					if json.Unmarshal(b, &event) == nil {
-						c.onTickSizeChange(&event)
-					}
+			var event common.TickSizeChange
+			if b, _ := json.Marshal(msg); json.Unmarshal(b, &event) == nil {
+				select {
+				case c.tickSizeChangeCh <- &event:
+				default:
 				}
 			}
 		}
 	}
 }
 
-// handleUserMessage 处理用户频道消息
 func (c *Connection) handleUserMessage(data interface{}) {
 	msg, ok := data.(map[string]interface{})
 	if !ok {
@@ -461,40 +416,35 @@ func (c *Connection) handleUserMessage(data interface{}) {
 	}
 
 	eventType, _ := msg["event_type"].(string)
-
 	switch eventType {
 	case "order":
-		if c.onOrder != nil {
-			var order common.OrderUpdate
-			if b, err := json.Marshal(msg); err == nil {
-				if json.Unmarshal(b, &order) == nil {
-					c.onOrder(&order)
-				}
+		var order common.OrderUpdate
+		if b, _ := json.Marshal(msg); json.Unmarshal(b, &order) == nil {
+			select {
+			case c.orderCh <- &order:
+			default:
 			}
 		}
 	case "trade":
-		if c.onTrade != nil {
-			var trade common.TradeNotification
-			if b, err := json.Marshal(msg); err == nil {
-				if json.Unmarshal(b, &trade) == nil {
-					// 去重处理
-					tradeID := trade.ID
-					if tradeID == "" {
-						tradeID = trade.TradeID
-					}
-					if tradeID != "" {
-						if _, loaded := c.processedTrades.LoadOrStore(tradeID, true); loaded {
-							return // 已处理过
-						}
-					}
-					c.onTrade(&trade)
+		var trade common.TradeNotification
+		if b, _ := json.Marshal(msg); json.Unmarshal(b, &trade) == nil {
+			tradeID := trade.ID
+			if tradeID == "" {
+				tradeID = trade.TradeID
+			}
+			if tradeID != "" {
+				if _, loaded := c.processedTrades.LoadOrStore(tradeID, true); loaded {
+					return
 				}
+			}
+			select {
+			case c.tradeCh <- &trade:
+			default:
 			}
 		}
 	}
 }
 
-// handleClose 处理连接关闭
 func (c *Connection) handleClose(code int, reason string) {
 	c.mu.Lock()
 	c.isConnected = false
@@ -506,13 +456,11 @@ func (c *Connection) handleClose(code int, reason string) {
 		c.onDisconnected(code, reason)
 	}
 
-	// 非主动关闭时尝试重连
 	if !intentional && c.config.MaxReconnectAttempts > 0 {
 		c.tryReconnect()
 	}
 }
 
-// tryReconnect 尝试重连
 func (c *Connection) tryReconnect() {
 	c.mu.Lock()
 	if c.reconnectAttempts >= c.config.MaxReconnectAttempts {
@@ -522,7 +470,6 @@ func (c *Connection) tryReconnect() {
 		}
 		return
 	}
-
 	c.reconnectAttempts++
 	attempt := c.reconnectAttempts
 	delay := c.config.ReconnectDelay * time.Duration(attempt)
@@ -536,40 +483,10 @@ func (c *Connection) tryReconnect() {
 		c.mu.RLock()
 		intentional := c.isIntentionalClose
 		c.mu.RUnlock()
-
 		if !intentional {
-			if err := c.Connect(); err != nil {
-				if c.onError != nil {
-					c.onError(err)
-				}
+			if err := c.Connect(); err != nil && c.onError != nil {
+				c.onError(err)
 			}
 		}
-	})
-}
-
-// ClearProcessedTrades 清除已处理的成交记录（用于内存管理）
-func (c *Connection) ClearProcessedTrades() {
-	c.processedTrades = sync.Map{}
-}
-
-// Subscribe 动态订阅更多 assets（仅 Market 频道）
-func (c *Connection) Subscribe(assetIDs []string) error {
-	if c.channel != ChannelMarket {
-		return fmt.Errorf("subscribe only supported for market channel")
-	}
-	return c.Send(map[string]interface{}{
-		"assets_ids": assetIDs,
-		"operation":  "subscribe",
-	})
-}
-
-// Unsubscribe 取消订阅 assets（仅 Market 频道）
-func (c *Connection) Unsubscribe(assetIDs []string) error {
-	if c.channel != ChannelMarket {
-		return fmt.Errorf("unsubscribe only supported for market channel")
-	}
-	return c.Send(map[string]interface{}{
-		"assets_ids": assetIDs,
-		"operation":  "unsubscribe",
 	})
 }

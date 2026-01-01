@@ -24,9 +24,12 @@ cp .env.example .env
 # 运行示例
 go run examples/polymarket/gamma/main.go     # 市场数据
 go run examples/polymarket/clob/main.go      # 订单交易
-go run examples/polymarket/relayer/main.go   # 链上操作
-go run examples/polymarket/wss/main.go       # WebSocket
-go run examples/polymarket/data/main.go      # 用户数据
+go run examples/polymarket/relayer/main.go     # 链上操作
+go run examples/polymarket/wss_market/main.go     # WebSocket 市场数据
+go run examples/polymarket/wss_user/main.go       # WebSocket 用户数据
+go run examples/polymarket/wss_orderbook/main.go  # 本地订单簿维护
+go run examples/polymarket/wss_ticksize/main.go  # Tick Size 监控
+go run examples/polymarket/data/main.go        # 用户数据
 ```
 
 ## 项目结构
