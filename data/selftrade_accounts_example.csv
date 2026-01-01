@@ -1,0 +1,2 @@
+index,evmAddressA,evmPrivateKeyA,proxyAddressA,evmAddressB,evmPrivateKeyB,proxyAddressB
+1,0x...,YOUR_PRIVATE_KEY_A,127.0.0.1:7897,0x...,YOUR_PRIVATE_KEY_B,127.0.0.1:7897
