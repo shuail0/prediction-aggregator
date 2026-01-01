@@ -970,6 +970,94 @@ func (c *Client) GetAccountStatus(ctx context.Context) (*common.AccountStatus, e
 	}, nil
 }
 
+// ========== 通用查询方法 (与 TS 版本对齐) ==========
+
+// GetTokenBalance 查询 ERC20 代币余额
+func (c *Client) GetTokenBalance(ctx context.Context, tokenAddress string, address string) (*big.Int, error) {
+	addr := c.proxyAddress
+	if address != "" {
+		addr = ethcommon.HexToAddress(address)
+	}
+	return c.callBalanceOf(ctx, tokenAddress, addr)
+}
+
+// GetTokenAllowance 查询 ERC20 代币授权额度
+func (c *Client) GetTokenAllowance(ctx context.Context, tokenAddress, spender string, address string) (*big.Int, error) {
+	addr := c.proxyAddress
+	if address != "" {
+		addr = ethcommon.HexToAddress(address)
+	}
+	return c.callAllowance(ctx, tokenAddress, addr, ethcommon.HexToAddress(spender))
+}
+
+// GetERC1155Balance 查询 ERC1155 (CTF Position Token) 余额
+func (c *Client) GetERC1155Balance(ctx context.Context, tokenID string, address string) (*big.Int, error) {
+	addr := c.proxyAddress
+	if address != "" {
+		addr = ethcommon.HexToAddress(address)
+	}
+	return c.callERC1155BalanceOf(ctx, common.ContractCTF, addr, tokenID)
+}
+
+// IsApprovedForAll 检查 ERC1155 是否已授权给指定操作员
+func (c *Client) IsApprovedForAll(ctx context.Context, operator string, address string) (bool, error) {
+	addr := c.proxyAddress
+	if address != "" {
+		addr = ethcommon.HexToAddress(address)
+	}
+	return c.callIsApprovedForAll(ctx, common.ContractCTF, addr, ethcommon.HexToAddress(operator))
+}
+
+// SetApprovalForAll 授权 ERC1155 给指定操作员
+func (c *Client) SetApprovalForAll(ctx context.Context, operator string, approved bool) (*common.TransactionResult, error) {
+	data := encodeERC1155SetApprovalForAll(operator, approved)
+	return c.execute(ctx, []SafeTransaction{{
+		To:        common.ContractCTF,
+		Value:     "0",
+		Data:      data,
+		Operation: OperationTypeCall,
+	}}, "setApprovalForAll")
+}
+
+// ApproveToken 授权 ERC20 代币给指定地址
+func (c *Client) ApproveToken(ctx context.Context, tokenAddress, spender string, amount *big.Int) (*common.TransactionResult, error) {
+	amountStr := "115792089237316195423570985008687907853269984665640564039457584007913129639935" // MaxUint256
+	if amount != nil {
+		amountStr = amount.String()
+	}
+	data := encodeERC20Approve(spender, amountStr)
+	return c.execute(ctx, []SafeTransaction{{
+		To:        tokenAddress,
+		Value:     "0",
+		Data:      data,
+		Operation: OperationTypeCall,
+	}}, "approveToken")
+}
+
+// callERC1155BalanceOf 调用 ERC1155 balanceOf
+func (c *Client) callERC1155BalanceOf(ctx context.Context, token string, account ethcommon.Address, tokenID string) (*big.Int, error) {
+	methodID := crypto.Keccak256([]byte("balanceOf(address,uint256)"))[:4]
+
+	tokenIDBig := new(big.Int)
+	tokenIDBig.SetString(tokenID, 10)
+
+	data := append(methodID, ethcommon.LeftPadBytes(account.Bytes(), 32)...)
+	data = append(data, ethcommon.LeftPadBytes(tokenIDBig.Bytes(), 32)...)
+
+	result, err := c.ethClient.CallContract(ctx, ethereum.CallMsg{
+		To:   &[]ethcommon.Address{ethcommon.HexToAddress(token)}[0],
+		Data: data,
+	}, nil)
+	if err != nil {
+		return big.NewInt(0), err
+	}
+
+	if len(result) < 32 {
+		return big.NewInt(0), nil
+	}
+	return new(big.Int).SetBytes(result), nil
+}
+
 // callAllowance 调用 ERC20 allowance
 func (c *Client) callAllowance(ctx context.Context, token string, owner, spender ethcommon.Address) (*big.Int, error) {
 	methodID := crypto.Keccak256([]byte("allowance(address,address)"))[:4]
@@ -1085,7 +1173,8 @@ func encodeCTFSplitPosition(collateralToken, conditionID, amount string) string 
 	parentCollectionID := make([]byte, 32)
 	conditionIDBytes := ethcommon.HexToHash(conditionID).Bytes()
 
-	partitionOffset := ethcommon.LeftPadBytes(big.NewInt(128).Bytes(), 32)
+	// 头部: address(32) + bytes32(32) + bytes32(32) + offset(32) + uint256(32) = 160 bytes
+	partitionOffset := ethcommon.LeftPadBytes(big.NewInt(160).Bytes(), 32)
 
 	amountBig := new(big.Int)
 	amountBig.SetString(amount, 10)
@@ -1113,7 +1202,8 @@ func encodeCTFMergePositions(collateralToken, conditionID, amount string) string
 	parentCollectionID := make([]byte, 32)
 	conditionIDBytes := ethcommon.HexToHash(conditionID).Bytes()
 
-	partitionOffset := ethcommon.LeftPadBytes(big.NewInt(128).Bytes(), 32)
+	// 头部: address(32) + bytes32(32) + bytes32(32) + offset(32) + uint256(32) = 160 bytes
+	partitionOffset := ethcommon.LeftPadBytes(big.NewInt(160).Bytes(), 32)
 
 	amountBig := new(big.Int)
 	amountBig.SetString(amount, 10)
@@ -1141,7 +1231,8 @@ func encodeCTFRedeemPositions(collateralToken, conditionID string) string {
 	parentCollectionID := make([]byte, 32)
 	conditionIDBytes := ethcommon.HexToHash(conditionID).Bytes()
 
-	indexSetsOffset := ethcommon.LeftPadBytes(big.NewInt(96).Bytes(), 32)
+	// 头部: address(32) + bytes32(32) + bytes32(32) + offset(32) = 128 bytes
+	indexSetsOffset := ethcommon.LeftPadBytes(big.NewInt(128).Bytes(), 32)
 	indexSetsLength := ethcommon.LeftPadBytes(big.NewInt(2).Bytes(), 32)
 	indexSet1 := ethcommon.LeftPadBytes(big.NewInt(1).Bytes(), 32)
 	indexSet2 := ethcommon.LeftPadBytes(big.NewInt(2).Bytes(), 32)

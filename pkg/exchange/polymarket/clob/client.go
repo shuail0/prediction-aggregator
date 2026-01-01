@@ -132,7 +132,9 @@ func (c *Client) GetTickSize(ctx context.Context, tokenID string) (TickSize, err
 	if err := c.doGet(ctx, "/tick-size", url.Values{"token_id": {tokenID}}, &resp); err != nil {
 		return "", err
 	}
-	return TickSize(resp.MinimumTickSize), nil
+	// 转换 float64 到 TickSize 字符串
+	tickSizeStr := strconv.FormatFloat(resp.MinimumTickSize, 'f', -1, 64)
+	return TickSize(tickSizeStr), nil
 }
 
 // GetNegRisk 获取市场 neg risk 状态
@@ -491,7 +493,7 @@ func (c *Client) PostOrder(ctx context.Context, order *SignedOrder, orderType Or
 	}
 
 	body := postOrderRequest{
-		Order:     *order,
+		Order:     order.toOrderPayload(),
 		Owner:     c.apiCreds.ApiKey,
 		OrderType: orderType,
 	}
@@ -509,38 +511,49 @@ func (c *Client) PostOrders(ctx context.Context, orders []PostOrdersArgs) ([]Ord
 		return nil, fmt.Errorf("API credentials not set")
 	}
 
+	// 官方 SDK: 直接发送数组，不包装
 	var reqOrders []postOrderRequest
 	for _, o := range orders {
 		reqOrders = append(reqOrders, postOrderRequest{
-			Order:     o.Order,
+			Order:     o.Order.toOrderPayload(),
 			Owner:     c.apiCreds.ApiKey,
 			OrderType: o.OrderType,
+			DeferExec: false,
 		})
 	}
-	body := postOrdersRequest{Orders: reqOrders}
 
 	var resp []OrderResponse
-	if err := c.doPostWithL2Auth(ctx, "/orders", body, &resp); err != nil {
+	if err := c.doPostWithL2Auth(ctx, "/orders", reqOrders, &resp); err != nil {
 		return nil, err
 	}
 	return resp, nil
 }
 
-// CancelOrder 取消单个订单
-func (c *Client) CancelOrder(ctx context.Context, orderID string) (*CancelOrdersResponse, error) {
-	return c.CancelOrders(ctx, []string{orderID})
+// CancelOrder 取消单个订单 (使用 /order 端点)
+func (c *Client) CancelOrder(ctx context.Context, orderID string) (*CancelOrderResponse, error) {
+	if c.apiCreds == nil {
+		return nil, fmt.Errorf("API credentials not set")
+	}
+
+	// 官方 SDK: cancelOrder({ orderID: orderId })
+	body := map[string]string{"orderID": orderID}
+
+	var resp CancelOrderResponse
+	if err := c.doDeleteWithL2Auth(ctx, "/order", body, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
-// CancelOrders 取消多个订单
+// CancelOrders 取消多个订单 (使用 /orders 端点)
 func (c *Client) CancelOrders(ctx context.Context, orderIDs []string) (*CancelOrdersResponse, error) {
 	if c.apiCreds == nil {
 		return nil, fmt.Errorf("API credentials not set")
 	}
 
-	body := map[string][]string{"ids": orderIDs}
-
+	// 官方 SDK: cancelOrders(ordersHashes) - 直接发送数组
 	var resp CancelOrdersResponse
-	if err := c.doDeleteWithL2Auth(ctx, "/orders", body, &resp); err != nil {
+	if err := c.doDeleteWithL2Auth(ctx, "/orders", orderIDs, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -553,7 +566,7 @@ func (c *Client) CancelAll(ctx context.Context) (*CancelOrdersResponse, error) {
 	}
 
 	var resp CancelOrdersResponse
-	if err := c.doDeleteWithL2Auth(ctx, "/orders/all", nil, &resp); err != nil {
+	if err := c.doDeleteWithL2Auth(ctx, "/cancel-all", nil, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -566,7 +579,7 @@ func (c *Client) CancelMarketOrders(ctx context.Context, params OrderMarketCance
 	}
 
 	var resp CancelOrdersResponse
-	if err := c.doDeleteWithL2Auth(ctx, "/orders/market", params, &resp); err != nil {
+	if err := c.doDeleteWithL2Auth(ctx, "/cancel-market-orders", params, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -1153,7 +1166,8 @@ func (c *Client) doPostWithL2Auth(ctx context.Context, path string, body interfa
 		}
 	}
 
-	headers, err := buildL2AuthHeaders(c.funder, c.apiCreds, "POST", path, bodyBytes)
+	// L2 认证使用 signer 的 EOA 地址，不是 funder
+	headers, err := buildL2AuthHeaders(c.address, c.apiCreds, "POST", path, bodyBytes)
 	if err != nil {
 		return fmt.Errorf("build l2 auth headers: %w", err)
 	}
@@ -1181,7 +1195,8 @@ func (c *Client) doGetWithL2Auth(ctx context.Context, path string, params url.Va
 	}
 	fullURL := c.baseURL + fullPath
 
-	headers, err := buildL2AuthHeaders(c.funder, c.apiCreds, "GET", fullPath, nil)
+	// L2 认证: 使用 signer 的 EOA 地址，签名时 path 不包含查询参数
+	headers, err := buildL2AuthHeaders(c.address, c.apiCreds, "GET", path, nil)
 	if err != nil {
 		return fmt.Errorf("build l2 auth headers: %w", err)
 	}
@@ -1213,7 +1228,8 @@ func (c *Client) doDeleteWithL2Auth(ctx context.Context, path string, body inter
 		}
 	}
 
-	headers, err := buildL2AuthHeaders(c.funder, c.apiCreds, "DELETE", path, bodyBytes)
+	// L2 认证使用 signer 的 EOA 地址，不是 funder
+	headers, err := buildL2AuthHeaders(c.address, c.apiCreds, "DELETE", path, bodyBytes)
 	if err != nil {
 		return fmt.Errorf("build l2 auth headers: %w", err)
 	}

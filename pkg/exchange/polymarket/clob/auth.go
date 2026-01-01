@@ -109,7 +109,7 @@ func buildL2AuthHeaders(address string, creds *ApiKeyCreds, method, path string,
 	}, nil
 }
 
-// buildClobHmacSignature 构建 CLOB HMAC 签名
+// buildClobHmacSignature 构建 CLOB HMAC 签名 (URL-safe base64)
 func buildClobHmacSignature(secret, timestamp, method, path string, body []byte) string {
 	message := timestamp + method + path
 	if len(body) > 0 {
@@ -127,7 +127,11 @@ func buildClobHmacSignature(secret, timestamp, method, path string, body []byte)
 	h.Write([]byte(message))
 	signature := h.Sum(nil)
 
-	return base64.StdEncoding.EncodeToString(signature)
+	// 转换为 URL-safe base64 (官方 SDK 要求)
+	sig := base64.StdEncoding.EncodeToString(signature)
+	sig = strings.ReplaceAll(sig, "+", "-")
+	sig = strings.ReplaceAll(sig, "/", "_")
+	return sig
 }
 
 // BuilderAuthHeaders Builder 认证请求头

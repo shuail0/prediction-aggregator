@@ -1,6 +1,8 @@
 package clob
 
 import (
+	"encoding/json"
+
 	"github.com/shuail0/prediction-aggregator/pkg/exchange/polymarket/common"
 )
 
@@ -361,7 +363,13 @@ type PostOrdersArgs struct {
 	OrderType OrderType   `json:"orderType"`
 }
 
-// CancelOrdersResponse 取消订单响应
+// CancelOrderResponse 取消单个订单响应
+type CancelOrderResponse struct {
+	OrderID string `json:"orderID"`
+	Status  string `json:"status"`
+}
+
+// CancelOrdersResponse 取消多个订单响应
 type CancelOrdersResponse struct {
 	Canceled    []string       `json:"canceled"`
 	NotCanceled map[string]any `json:"not_canceled"`
@@ -614,7 +622,7 @@ type BanStatus struct {
 
 // TickSizeResponse TickSize 响应
 type TickSizeResponse struct {
-	MinimumTickSize string `json:"minimum_tick_size"`
+	MinimumTickSize float64 `json:"minimum_tick_size"`
 }
 
 // NegRiskResponse NegRisk 响应
@@ -627,12 +635,52 @@ type FeeRateResponse struct {
 	BaseFee float64 `json:"base_fee"`
 }
 
+// orderPayload 订单提交时的 JSON 格式 (符合官方 SDK 格式)
+type orderPayload struct {
+	Salt          json.Number `json:"salt"`          // 官方 SDK 用 parseInt，但大数需要 string
+	Maker         string      `json:"maker"`
+	Signer        string      `json:"signer"`
+	Taker         string      `json:"taker"`
+	TokenID       string      `json:"tokenId"`
+	MakerAmount   string      `json:"makerAmount"`
+	TakerAmount   string      `json:"takerAmount"`
+	Side          string      `json:"side"`          // "BUY" 或 "SELL"，不是 0/1
+	Expiration    string      `json:"expiration"`
+	Nonce         string      `json:"nonce"`
+	FeeRateBps    string      `json:"feeRateBps"`
+	SignatureType int         `json:"signatureType"`
+	Signature     string      `json:"signature"`
+}
+
+// toOrderPayload 转换 SignedOrder 为提交格式
+func (o *SignedOrder) toOrderPayload() orderPayload {
+	side := "BUY"
+	if o.Side == 1 {
+		side = "SELL"
+	}
+	return orderPayload{
+		Salt:          json.Number(o.Salt),
+		Maker:         o.Maker,
+		Signer:        o.Signer,
+		Taker:         o.Taker,
+		TokenID:       o.TokenID,
+		MakerAmount:   o.MakerAmount,
+		TakerAmount:   o.TakerAmount,
+		Side:          side,
+		Expiration:    o.Expiration,
+		Nonce:         o.Nonce,
+		FeeRateBps:    o.FeeRateBps,
+		SignatureType: o.SignatureType,
+		Signature:     o.Signature,
+	}
+}
+
 // 内部请求类型
 type postOrderRequest struct {
-	Order     SignedOrder `json:"order"`
-	Owner     string      `json:"owner"`
-	OrderType OrderType   `json:"orderType"`
-	DeferExec bool        `json:"deferExec,omitempty"`
+	Order     orderPayload `json:"order"`
+	Owner     string       `json:"owner"`
+	OrderType OrderType    `json:"orderType"`
+	DeferExec bool         `json:"deferExec"` // 必须始终包含，不能用 omitempty
 }
 
 type postOrdersRequest struct {

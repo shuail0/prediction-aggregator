@@ -68,10 +68,9 @@ func (b *OrderBuilder) BuildOrder(order UserOrder, opts CreateOrderOptions) (*Si
 
 	salt := generateSalt()
 
+	// expiration: 只有 GTD 订单需要设置，其他订单类型必须为 "0"
+	// 官方 SDK: if (!expiration) expiration = '0'
 	expiration := order.Expiration
-	if expiration == 0 {
-		expiration = time.Now().Add(365 * 24 * time.Hour).Unix()
-	}
 
 	nonce := order.Nonce
 
@@ -391,10 +390,15 @@ func decimalPlaces(value float64) int {
 }
 
 func generateSalt() string {
-	bytes := make([]byte, 32)
-	rand.Read(bytes)
-	salt := new(big.Int).SetBytes(bytes)
-	return salt.String()
+	// 官方 SDK: Math.round(Math.random() * Date.now())
+	// 生成一个 0 到 timestamp 之间的随机数
+	timestamp := time.Now().UnixMilli()
+	randomBytes := make([]byte, 8)
+	rand.Read(randomBytes)
+	// 使用模运算确保结果在合理范围内
+	random := new(big.Int).SetBytes(randomBytes)
+	random.Mod(random, big.NewInt(timestamp))
+	return random.String()
 }
 
 // GetOrderHash 计算订单哈希
