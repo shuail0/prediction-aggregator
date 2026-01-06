@@ -9,6 +9,7 @@ const (
 const (
 	DefaultConditionalTokens = "0xAD1a38cEc043e70E83a3eC30443dB285ED10D774"
 	DefaultMultisend         = "0x998739BFdAAdde7C933B942a68053933098f9EDa"
+	DefaultFeeManager        = "0xC9063Dc52dEEfb518E5b6634A6b8D624bc5d7c36"
 	ZeroAddress              = "0x0000000000000000000000000000000000000000"
 )
 
@@ -27,7 +28,7 @@ func DefaultContractAddresses(chainID int64) ContractAddresses {
 		return ContractAddresses{
 			ConditionalTokens: DefaultConditionalTokens,
 			Multisend:         DefaultMultisend,
-			FeeManager:        "", // 从 API QuoteToken 获取
+			FeeManager:        DefaultFeeManager,
 			CtfExchange:       "", // 从 API QuoteToken 获取
 		}
 	default:
@@ -86,5 +87,5 @@ const MultisendABI = `[
 
 // FeeManager ABI
 const FeeManagerABI = `[
-	{"constant":true,"inputs":[{"name":"tokenId","type":"uint256"}],"name":"getFeeRateSettings","outputs":[{"name":"makerFee","type":"uint256"},{"name":"takerFee","type":"uint256"},{"name":"enabled","type":"bool"}],"type":"function"}
+	{"constant":true,"inputs":[{"name":"tokenId","type":"uint256"}],"name":"getFeeRateSettings","outputs":[{"name":"makerFeeRateBps","type":"uint256"},{"name":"takerFeeRateBps","type":"uint256"},{"name":"enabled","type":"bool"},{"name":"minFeeAmount","type":"uint256"}],"type":"function"}
 ]`

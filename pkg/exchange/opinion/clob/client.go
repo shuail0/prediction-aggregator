@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +36,7 @@ type Client struct {
 	address      string
 	multiSigAddr string
 	orderBuilder *OrderBuilder
+	proxyString  string
 
 	// 缓存
 	quoteTokens     []common.QuoteToken
@@ -69,6 +71,7 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		apiKey:          cfg.APIKey,
 		chainID:         cfg.ChainID,
 		multiSigAddr:    cfg.MultiSigAddr,
+		proxyString:     cfg.ProxyString,
 		marketCache:     make(map[int64]*common.Market),
 		marketCacheTime: make(map[int64]time.Time),
 	}
@@ -200,6 +203,10 @@ func (c *Client) GetOrderBook(ctx context.Context, tokenID string) (*common.Orde
 	if result.TokenID == "" {
 		result.TokenID = tokenID
 	}
+
+	// 排序订单簿: 卖单按价格从低到高，买单按价格从高到低
+	sortOrderBook(&result)
+
 	return &result, nil
 }
 
@@ -237,6 +244,9 @@ func (c *Client) GetOrderBookWithQuestionID(ctx context.Context, tokenID, questi
 		}
 	}
 
+	// 排序订单簿
+	sortOrderBook(ob)
+
 	return ob, nil
 }
 
@@ -256,6 +266,13 @@ func (c *Client) GetLatestPrice(ctx context.Context, tokenID string) (*common.La
 	}
 
 	return &resp.Result.Data, nil
+}
+
+// GetFeeRates 从链上 FeeManager 合约获取费率设置
+// 返回 topic_rate 等费率信息，可用于精确计算手续费
+// 建议: 获取一次后缓存 TopicRate，用于多次本地计算
+func (c *Client) GetFeeRates(ctx context.Context, tokenID string) (*FeeRateSettings, error) {
+	return GetFeeRates(ctx, tokenID, "", c.proxyString)
 }
 
 // GetPriceHistory 获取价格历史
@@ -788,4 +805,21 @@ func (c *Client) calculateMakerAmount(input PlaceOrderInput) (float64, error) {
 // CalculateOrderAmounts 辅助计算订单金额
 func CalculateOrderAmounts(price float64, makerAmount *big.Int, side common.OrderSide, decimals int) (*big.Int, *big.Int) {
 	return common.CalculateOrderAmounts(price, makerAmount, side, decimals)
+}
+
+// sortOrderBook 对订单簿进行排序
+// 卖单（Asks）按价格从低到高排序，买单（Bids）按价格从高到低排序
+func sortOrderBook(ob *common.OrderBook) {
+	// 卖单按价格从低到高
+	sort.Slice(ob.Asks, func(i, j int) bool {
+		pi, _ := strconv.ParseFloat(ob.Asks[i].Price, 64)
+		pj, _ := strconv.ParseFloat(ob.Asks[j].Price, 64)
+		return pi < pj
+	})
+	// 买单按价格从高到低
+	sort.Slice(ob.Bids, func(i, j int) bool {
+		pi, _ := strconv.ParseFloat(ob.Bids[i].Price, 64)
+		pj, _ := strconv.ParseFloat(ob.Bids[j].Price, 64)
+		return pi > pj
+	})
 }

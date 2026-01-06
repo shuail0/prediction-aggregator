@@ -126,8 +126,61 @@ func main() {
 		fmt.Println()
 	}
 
-	// 5. URL 解析功能 (Categorical 市场示例)
-	fmt.Println("5. URL 解析功能 (Categorical 市场)")
+	// 5. 手续费计算
+	fmt.Println("5. 手续费计算演示")
+	fmt.Println("  公式: rate = topic_rate × price × (1-price) × discounts")
+	fmt.Println("  限制: 最低订单 $5, 最低手续费 $0.5, Maker 免费")
+	fmt.Println()
+
+	// 场景1: 价格 0.5 (最高费率点)
+	fee1 := clob.CalculateFee(clob.FeeParams{Price: 0.5, Notional: 100})
+	fmt.Printf("  场景1: 价格=0.5, 金额=$100 (无折扣)\n")
+	fmt.Printf("    有效费率: %.4f (%.2f%%)\n", fee1.EffectiveRate, fee1.EffectiveRate*100)
+	fmt.Printf("    手续费: $%.2f\n", fee1.ActualFee)
+
+	// 场景2: 价格 0.1 (低费率点)
+	fee2 := clob.CalculateFee(clob.FeeParams{Price: 0.1, Notional: 100})
+	fmt.Printf("  场景2: 价格=0.1, 金额=$100 (无折扣)\n")
+	fmt.Printf("    有效费率: %.4f (%.2f%%)\n", fee2.EffectiveRate, fee2.EffectiveRate*100)
+	fmt.Printf("    手续费: $%.2f\n", fee2.ActualFee)
+
+	// 场景3: 带折扣
+	fee3 := clob.CalculateFee(clob.FeeParams{
+		Price: 0.5, Notional: 100,
+		UserDiscount: 0.3, ReferralDiscount: 0.1,
+	})
+	fmt.Printf("  场景3: 价格=0.5, 金额=$100 (VIP 30%% + 推荐 10%% 折扣)\n")
+	fmt.Printf("    有效费率: %.4f (%.2f%%)\n", fee3.EffectiveRate, fee3.EffectiveRate*100)
+	fmt.Printf("    总折扣: %.2f%%\n", fee3.TotalDiscount*100)
+	fmt.Printf("    手续费: $%.2f\n", fee3.ActualFee)
+
+	// 场景4: 小额订单 (触发最低手续费)
+	fee4 := clob.CalculateFee(clob.FeeParams{Price: 0.1, Notional: 5})
+	fmt.Printf("  场景4: 价格=0.1, 金额=$5 (触发最低手续费)\n")
+	fmt.Printf("    基础费用: $%.4f\n", fee4.BaseFee)
+	fmt.Printf("    实际费用: $%.2f (最低限制)\n", fee4.ActualFee)
+
+	// 场景5: Maker 免费
+	fee5 := clob.CalculateFee(clob.FeeParams{Price: 0.5, Notional: 100, IsMaker: true})
+	fmt.Printf("  场景5: Maker 订单 (挂单)\n")
+	fmt.Printf("    手续费: $%.2f (Maker 免费)\n", fee5.ActualFee)
+
+	// 场景6: 从链上获取实际费率
+	fmt.Printf("  场景6: 从链上获取费率\n")
+	if len(markets) > 0 {
+		feeRates, err := clob.GetFeeRates(ctx, markets[0].YesTokenID, "", "")
+		if err != nil {
+			fmt.Printf("    获取失败: %v\n", err)
+		} else {
+			fmt.Printf("    Taker Fee Bps: %s\n", feeRates.TakerFeeRateBps)
+			fmt.Printf("    Topic Rate: %.4f\n", feeRates.TopicRate)
+			fmt.Printf("    Taker Max Fee (p=0.5): %.2f%%\n", feeRates.TakerMaxFeeRate*100)
+		}
+	}
+	fmt.Println()
+
+	// 6. URL 解析功能 (Categorical 市场示例)
+	fmt.Println("6. URL 解析功能 (Categorical 市场)")
 	testURL := "https://app.opinion.trade/detail?topicId=137&type=multi"
 	rootID, _ := readClient.GetRootMarketIDByURL(testURL)
 	marketType, _ := readClient.GetMarketTypeByURL(testURL)
@@ -163,6 +216,7 @@ func main() {
 	fmt.Println()
 
 	// ========== Part 2: 交易功能 (需要私钥) ==========
+	fmt.Println()
 	fmt.Println("========== Part 2: 交易功能 ==========")
 
 	if privateKey == "" || multiSigAddr == "" {
@@ -172,8 +226,8 @@ func main() {
 		return
 	}
 
-	// 6. 创建交易客户端
-	fmt.Println("6. 初始化交易客户端")
+	// 7. 创建交易客户端
+	fmt.Println("7. 初始化交易客户端")
 	client, err := clob.NewClient(clob.ClientConfig{
 		APIKey:       apiKey,
 		PrivateKey:   privateKey,
@@ -189,8 +243,8 @@ func main() {
 	fmt.Printf("  Multi-Sig 地址: %s\n", multiSigAddr)
 	fmt.Println()
 
-	// 7. 获取余额
-	fmt.Println("7. 获取账户余额")
+	// 8. 获取余额
+	fmt.Println("8. 获取账户余额")
 	balanceResult, err := client.GetMyBalances(ctx)
 	if err != nil {
 		fmt.Printf("  获取失败: %v\n", err)
@@ -207,8 +261,8 @@ func main() {
 	}
 	fmt.Println()
 
-	// 8. 获取持仓
-	fmt.Println("8. 获取持仓")
+	// 9. 获取持仓
+	fmt.Println("9. 获取持仓")
 	positions, err := client.GetMyPositions(ctx, clob.PositionQueryOptions{Limit: 10})
 	if err != nil {
 		fmt.Printf("  获取失败: %v\n", err)
@@ -231,8 +285,8 @@ func main() {
 	}
 	fmt.Println()
 
-	// 9. 获取待处理订单
-	fmt.Println("9. 获取待处理订单")
+	// 10. 获取待处理订单
+	fmt.Println("10. 获取待处理订单")
 	orders, err := client.GetMyOrders(ctx, clob.OrderQueryOptions{
 		Status: "1", // pending
 		Limit:  20,
@@ -254,8 +308,8 @@ func main() {
 	}
 	fmt.Println()
 
-	// 10. 获取交易历史
-	fmt.Println("10. 获取交易历史")
+	// 11. 获取交易历史
+	fmt.Println("11. 获取交易历史")
 	trades, err := client.GetMyTrades(ctx, clob.TradeQueryOptions{Limit: 10})
 	if err != nil {
 		fmt.Printf("  获取失败: %v\n", err)
@@ -307,8 +361,8 @@ func main() {
 		fmt.Println()
 	*/
 
-	// 11. 取消订单示例
-	fmt.Println("11. 取消订单示例")
+	// 12. 取消订单示例
+	fmt.Println("12. 取消订单示例")
 	if len(orders) > 0 {
 		orderToCancel := orders[0].OrderID
 		fmt.Printf("  取消订单: %s\n", orderToCancel)
@@ -324,8 +378,8 @@ func main() {
 	}
 	fmt.Println()
 
-	// 12. 批量取消订单示例
-	fmt.Println("12. 批量取消订单示例")
+	// 13. 批量取消订单示例
+	fmt.Println("13. 批量取消订单示例")
 	fmt.Println("  使用 CancelAllOrders 取消所有订单")
 	result, err := client.CancelAllOrders(ctx, nil)
 	if err != nil {

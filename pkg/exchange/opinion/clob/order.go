@@ -42,17 +42,18 @@ func (b *OrderBuilder) BuildOrder(input OrderDataInput, quoteTokenDecimals int) 
 	makerAmountWei := opinionCommon.AmountToWei(input.MakerAmount, quoteTokenDecimals)
 
 	// 计算 takerAmount
-	var takerAmount *big.Int
+	var makerAmount, takerAmount *big.Int
 	if input.OrderType == opinionCommon.OrderTypeMarket {
 		// 市价单: takerAmount = 0, price = 0
+		makerAmount = makerAmountWei
 		takerAmount = big.NewInt(0)
 	} else {
-		// 限价单: 根据价格计算
+		// 限价单: 根据价格计算 (使用返回的 recalculatedMaker 确保价格精度)
 		price, err := strconv.ParseFloat(input.Price, 64)
 		if err != nil {
 			return nil, fmt.Errorf("parse price: %w", err)
 		}
-		_, takerAmount = opinionCommon.CalculateOrderAmounts(price, makerAmountWei, input.Side, quoteTokenDecimals)
+		makerAmount, takerAmount = opinionCommon.CalculateOrderAmounts(price, makerAmountWei, input.Side, quoteTokenDecimals)
 	}
 
 	// API/EIP712 side: 0=Buy, 1=Sell (不同于 common.OrderSide: 1=Buy, 2=Sell)
@@ -67,7 +68,7 @@ func (b *OrderBuilder) BuildOrder(input OrderDataInput, quoteTokenDecimals int) 
 		Signer:        b.signer.Hex(),
 		Taker:         opinionCommon.ZeroAddress,
 		TokenID:       input.TokenID,
-		MakerAmount:   makerAmountWei.String(),
+		MakerAmount:   makerAmount.String(),
 		TakerAmount:   takerAmount.String(),
 		Expiration:    "0",
 		Nonce:         "0",
